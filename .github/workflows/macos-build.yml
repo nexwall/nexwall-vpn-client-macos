@@ -3,10 +3,11 @@ name: macOS build
 # manual step that needs the Apple Developer ID certificate (stored as repository secrets, never in the repo).
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -58,3 +59,24 @@ jobs:
           path: |
             tunnelblick/build/Release/*.dmg
             tunnelblick/build/Release/*.app
+
+      - name: Publish to the pre-release "nightly"
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          find tunnelblick/build/Release -maxdepth 1 -name '*.dmg' | tee dmgs.txt
+          if [ ! -s dmgs.txt ]; then
+            # no dmg (Xcode could not build the disk image on the runner): ship the app as a zip
+            ditto -c -k --keepParent tunnelblick/build/Release/Tunnelblick.app dist/nexwall-vpn-macos-${GITHUB_SHA::7}-app.zip
+          else
+            while read f; do cp "$f" "dist/nexwall-vpn-macos-${GITHUB_SHA::7}-$(basename "$f")"; done < dmgs.txt
+          fi
+          ls -l dist
+          gh release view nightly >/dev/null 2>&1 || \
+            gh release create nightly --prerelease --target "$GITHUB_SHA" \
+              --title "Nexwall VPN for macOS - test build (unsigned)" --notes "placeholder"
+          gh release upload nightly dist/* --clobber
+          gh release edit nightly --prerelease --title "Nexwall VPN for macOS - test build (unsigned)" \
+            --notes "Automatic test build of commit ${GITHUB_SHA::7}. NOT signed or notarized: macOS Gatekeeper will block it until you allow it manually. Based on Tunnelblick (GPLv2); source in this repository."

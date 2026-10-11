@@ -1,0 +1,60 @@
+name: macOS build
+# Builds Tunnelblick (unsigned) on a GitHub-hosted macOS runner. Release signing / notarization is a separate,
+# manual step that needs the Apple Developer ID certificate (stored as repository secrets, never in the repo).
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (unsigned)
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode and install autotools
+        run: |
+          sw_vers
+          ls -d /Applications/Xcode*.app || true
+          X=$(ls -d /Applications/Xcode_26.0*.app 2>/dev/null | sort -V | tail -1)
+          [ -z "$X" ] && X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$X" ]; then sudo xcode-select -s "$X"; fi
+          xcodebuild -version
+          brew install autoconf automake libtool
+          # Tunnelblick's third_party build expects the autotools in /usr/local/bin
+          sudo mkdir -p /usr/local/bin
+          for t in autoconf automake autoreconf aclocal autoheader libtoolize glibtoolize; do
+            p=$(command -v $t || true); [ -n "$p" ] && sudo ln -sf "$p" /usr/local/bin/$t || true
+          done
+
+      - name: List schemes
+        run: xcodebuild -list -project tunnelblick/Tunnelblick.xcodeproj
+
+      - name: Build Tunnelblick
+        id: build
+        run: |
+          set -o pipefail
+          xcodebuild -project tunnelblick/Tunnelblick.xcodeproj -scheme Tunnelblick -configuration Release \
+            SYMROOT="$PWD/tunnelblick/build" \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Show the first errors (as annotations, readable without logging in)
+        if: failure()
+        run: |
+          grep -E "error:|\*\*\* |BUILD FAILED|fatal|No such file|not found" "$RUNNER_TEMP/build.log" | head -25 | while IFS= read -r l; do
+            echo "::error::${l:0:450}"
+          done
+          tail -n 15 "$RUNNER_TEMP/build.log" | while IFS= read -r l; do echo "::warning::${l:0:450}"; done
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: tunnelblick-unsigned
+          path: |
+            tunnelblick/build/Release/*.dmg
+            tunnelblick/build/Release/*.app

@@ -1,3 +1,5 @@
+**Nexwall VPN for macOS** is a branded, public fork of Tunnelblick for the Nexwall firewall SSL VPN. See BRANDING.md. Original README follows.
+
 Tunnelblick
 ===========
 
